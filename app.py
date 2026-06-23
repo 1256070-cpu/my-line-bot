@@ -44,30 +44,26 @@ def get_weather(city_name):
         url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{code}.json"
         res = requests.get(url).json()
         
-        # 明日朝の定期配信への布石として、今日の天気を取得
-        report_time = res[0]["reportDatetime"]
-        area_data = res[0]["timeSeries"][0]["areas"][0]
-        weather = area_data["weathers"][0] # 今日の天気
-        
+        # 今日の天気を取得
+        weather = res[0]["timeSeries"][0]["areas"][0]["weathers"][0]
         return f"【{city_name}の天気】\n今日：{weather}"
     except Exception as e:
-        return f"天気データの取得に失敗しました。({str(e)})"
+        return f"天気データの取得に失敗しました。"
 
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
-    app.logger.info("Request body: " + body)
 
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
-        app.logger.info("Invalid signature. Please check your channel access token/channel secret.")
         abort(400)
 
     return 'OK'
 
-@handler.add(MessageEvent, content_type=TextMessageContent)
+# エラーの原因だった content_type= を削除し、正しい記述に修正しました
+@handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_message = event.message.text.strip()
     
@@ -77,11 +73,11 @@ def handle_message(event):
     if weather_info:
         reply_text = weather_info
     else:
-        reply_text = f"「{user_message}」ですね！\n\n※現在はテスト中につき「東京」「大阪」「名古屋」「福岡」「札幌」のいずれかを送ると、ピンポイントで今日の天気を返します！"
+        reply_text = f"「{user_message}」ですね！\n\n※現在はテスト中につき「東京」「大阪」「名古屋」「福岡」「札幌」のいずれかを送ると、今日の天気を返します！"
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
-        line_bot_api.reply_message_with_http_info(
+        line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
                 messages=[TextMessage(text=reply_text)]
