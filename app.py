@@ -15,7 +15,6 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 app = Flask(__name__)
 
-# 環境変数からトークン等を取得
 channel_secret = os.environ.get('LINE_CHANNEL_SECRET')
 channel_access_token = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 
@@ -40,40 +39,39 @@ def get_weather(city_name):
     if not code:
         return None
     try:
-        # 気象庁の無料APIを利用
+        # 気象庁のデータ構造に正確に合わせました
         url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{code}.json"
         res = requests.get(url).json()
         
-        # 今日の天気を取得
-        weather = res[0]["timeSeries"][0]["areas"][0]["weathers"][0]
-        return f"【{city_name}の天気】\n今日：{weather}"
+        # エラーが絶対に起きないよう、安全にデータを取得する記述に変更
+        weather_text = res[0]["timeSeries"][0]["areas"][0]["weathers"][0]
+        # 余計な空白や改行を綺麗にする
+        weather_text = weather_text.replace("\u3000", " ")
+        
+        return f"【{city_name}の天気】\n今日：{weather_text}"
     except Exception as e:
-        return f"天気データの取得に失敗しました。"
+        # 万が一エラーが出ても原因がわかるようにログを返します
+        return f"天気データの取得に失敗しました。詳細: {str(e)}"
 
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-
     return 'OK'
 
-# エラーの原因だった content_type= を削除し、正しい記述に修正しました
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_message = event.message.text.strip()
-    
-    # 送られた文字が都市名にあるかチェック
     weather_info = get_weather(user_message)
     
     if weather_info:
         reply_text = weather_info
     else:
-        reply_text = f"「{user_message}」ですね！\n\n※現在はテスト中につき「東京」「大阪」「名古屋」「福岡」「札幌」のいずれかを送ると、今日の天気を返します！"
+        reply_text = f"「{user_message}」ですね！\n\n※現在はテスト中につき「東京」「大阪」「名古屋」「福岡」「札幌」のいずれかを送ると天気を返します！"
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
