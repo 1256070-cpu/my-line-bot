@@ -54,18 +54,12 @@ def judge_garbage(target_date, settings):
     paper_days = settings.get("paper", [])
     paper_week = settings.get("paper_week", "毎週")
     
-    # 追加のゴミ
-    non_burnable_days = settings.get("non_burnable", [])
-    spray_days = settings.get("spray", [])
-    battery_days = settings.get("battery", [])
-    nature_days = settings.get("nature", [])
-    
     if w_idx in burnable_days: 
         g_list.append("🔥燃やせるゴミ")
     if w_idx in plastic_days: 
         g_list.append("♻️容器包装プラスチック")
     if w_idx in bottle_can_days: 
-        g_list.append("🍾びん・缶・ペット")
+        g_list.append("🍾びん・缶・ペット（※スプレー缶・電池もここや！）")
         
     if w_idx in paper_days:
         if paper_week == "毎週": 
@@ -74,17 +68,12 @@ def judge_garbage(target_date, settings):
             g_list.append("📰雑がみ（第1・3週）")
         elif paper_week == "第2・第4" and nth_week in [2, 4]: 
             g_list.append("📰雑がみ（第2・4週）")
-            
-    if w_idx in non_burnable_days:
-        g_list.append("💎燃やせないゴミ")
-    if w_idx in spray_days:
-        g_list.append("💨スプレー缶・カセットボンベ")
-    if w_idx in battery_days:
-        g_list.append("🔋乾電池・加熱式タバコ")
-    if w_idx in nature_days:
-        g_list.append("🍂枝・葉・草（自然ゴミ）")
         
-    return "・".join(g_list) if g_list else "❌何もないわ！"
+    return "・".join(g_list) if g_list else "❌定期回収のゴミはないわ！"
+
+# 真島吾郎からの説教メッセージ（追加文）
+def get_majima_notice():
+    return "\n⚠️あとなぁ！月1回の「燃やせないゴミ」とか期間限定の「枝・葉・草」みたいなレアなやつは、ウチの通知をアテにせんと自分でカレンダー確認して出しにいきや！忘れたら承知せんでぇ！"
 
 def get_weather_and_garbage(user_id, is_tomorrow=False):
     settings = USER_SETTINGS.get(user_id)
@@ -139,17 +128,19 @@ def get_weather_and_garbage(user_id, is_tomorrow=False):
             f"📅明日 ({weekdays_ja[target_date.weekday()]}): {tomorrow_w}{temp_text_tomorrow}",
             f" ┗ 出すゴミ: {judge_garbage(target_date, settings)}\n",
             "うかうかしとったら、明日の朝ゴミ出し遅れるでぇ！",
-            "準備できたら下のボタン押しや！"
+            get_majima_notice(),
+            "\n準備できたら下のボタン押しや！"
         ]
     else:
         target_date = now_tokyo
         lines = [
-            f"【{area_name}の朝の挨拶やデぇ！】",
+            f"【{area_name}の朝の挨拶やでぇ！】",
             "おっしゃ、今日の天気とゴミ情報教えたるわ！おんどれ起きや！\n",
             f"📅今日 ({weekdays_ja[target_date.weekday()]}): {today_w}{temp_text_today}",
             f" ┗ 出すゴミ: {judge_garbage(target_date, settings)}\n",
             "しっかりゴミ出して、シャキッと働きや！",
-            "出したら下のボタン押しや！"
+            get_majima_notice(),
+            "\n出したら下のボタン押しや！"
         ]
         
     return "\n".join(lines)
@@ -199,19 +190,21 @@ def get_anytime_info(user_id, target_day_str="全部"):
     d1 = now_tokyo + timedelta(days=1)
     d2 = now_tokyo + timedelta(days=2)
     
+    notice = get_majima_notice()
+    
     if target_day_str == "今日":
-        return f"【{area_name}：今日の情報や！】\n📅今日 ({weekdays_ja[d0.weekday()]}): {today_w}{temp_today}\n ┗ ゴミ: {judge_garbage(d0, settings)}"
+        return f"【{area_name}：今日の情報や！】\n📅今日 ({weekdays_ja[d0.weekday()]}): {today_w}{temp_today}\n ┗ ゴミ: {judge_garbage(d0, settings)}\n{notice}"
     elif target_day_str == "明日":
-        return f"【{area_name}：明日の情報や！】\n📅明日 ({weekdays_ja[d1.weekday()]}): {tomorrow_w}{temp_tomorrow}\n ┗ ゴミ: {judge_garbage(d1, settings)}"
+        return f"【{area_name}：明日の情報や！】\n📅明日 ({weekdays_ja[d1.weekday()]}): {tomorrow_w}{temp_tomorrow}\n ┗ ゴミ: {judge_garbage(d1, settings)}\n{notice}"
     elif target_day_str == "明後日":
-        return f"【{area_name}：明後日の情報や！】\n📅明後日 ({weekdays_ja[d2.weekday()]}): {day_after_w}\n ┗ ゴミ: {judge_garbage(d2, settings)}"
+        return f"【{area_name}：明後日の情報や！】\n📅明後日 ({weekdays_ja[d2.weekday()]}): {day_after_w}\n ┗ ゴミ: {judge_garbage(d2, settings)}\n{notice}"
     else:
         lines = [
             f"【{area_name}のご案内や！】",
             f"📅今日 ({weekdays_ja[d0.weekday()]}): {today_w}{temp_today}\n ┗ ゴミ: {judge_garbage(d0, settings)}",
             f"📅明日 ({weekdays_ja[d1.weekday()]}): {tomorrow_w}{temp_tomorrow}\n ┗ ゴミ: {judge_garbage(d1, settings)}",
             f"📅明後日 ({weekdays_ja[d2.weekday()]}): {day_after_w}\n ┗ ゴミ: {judge_garbage(d2, settings)}",
-            "\nゴミ出し遅れたら承知せんでぇ！"
+            notice
         ]
         return "\n".join(lines)
 
@@ -284,9 +277,11 @@ def handle_message(event):
     day_map = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
     patterns_week = ["月曜", "火曜", "水曜", "木曜", "金曜", "収集なし"]
 
+    # 「ゴミ出したで！」報告
     if user_message == "ゴミ出したで！":
         reply_text = "おぅ、ちゃんと出せたみたいやな。明日も遅れんとキリキリ働きや！"
 
+    # 初期設定スタート
     elif user_message in ["初期設定", "設定"]:
         reply_text = "おんどれの住んどる地域はどっちや？選べや！"
         quick_reply_items = [
@@ -300,7 +295,7 @@ def handle_message(event):
             QuickReplyItem(action=MessageAction(label=ward, text=f"区選択:{ward}")) for ward in SAPPORO_WARDS
         ]
         
-    elif user_message == "地域選択:その他":
+    elif user_message == "地域選択:other":
         reply_text = "おんどれの市町村名を「根室市」とか「旭川市」みたいに直接チャットで打ち込んで送りや！"
 
     elif any(user_message.endswith(s) for s in ["市", "町", "村"]) and not user_message.startswith("区選択:"):
@@ -329,7 +324,7 @@ def handle_message(event):
         plastic_day = [day_map[p_str]] if p_str in day_map else []
         if user_id not in USER_SETTINGS: USER_SETTINGS[user_id] = {"area": "札幌市北区"}
         USER_SETTINGS[user_id]["plastic"] = plastic_day
-        reply_text = f"プラスチックは（{p_str}曜）やな！\n次は「びん・缶・ペットボトル」の曜日や！"
+        reply_text = f"プラスチックは（{p_str}曜）やな！\n次は「びん・缶・ペットボトル」の曜日や！\n⚠️札幌ならスプレー缶・乾電池もこの日やで！"
         quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"びん缶:{p}")) for p in patterns_week]
 
     elif user_message.startswith("びん缶:"):
@@ -337,7 +332,7 @@ def handle_message(event):
         bottle_can_day = [day_map[bc_str]] if bc_str in day_map else []
         if user_id not in USER_SETTINGS: USER_SETTINGS[user_id] = {"area": "札幌市北区"}
         USER_SETTINGS[user_id]["bottle_can"] = bottle_can_day
-        reply_text = f"びん缶ペットは（{bc_str}曜）やな！\n次は「雑がみ・紙類」の曜日を選んでや！"
+        reply_text = f"びん缶ペットは（{bc_str}曜）やな！\nほな、毎週または隔週の「雑がみ・紙類」の曜日を選んでや！"
         quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"雑がみ曜日:{p}")) for p in patterns_week]
 
     elif user_message.startswith("雑がみ曜日:"):
@@ -356,35 +351,7 @@ def handle_message(event):
         freq = user_message.split(":")[1]
         if user_id not in USER_SETTINGS: USER_SETTINGS[user_id] = {"area": "札幌市北区"}
         USER_SETTINGS[user_id]["paper_week"] = freq
-        reply_text = "よし、ここから追加分や！\n「💎 燃やせないゴミ」の曜日を選びや！"
-        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"燃やせない:{p}")) for p in patterns_week]
-
-    elif user_message.startswith("燃やせない:"):
-        p_str = user_message.split(":")[1][0]
-        non_burnable = [day_map[p_str]] if p_str in day_map else []
-        USER_SETTINGS[user_id]["non_burnable"] = non_burnable
-        reply_text = f"燃やせないゴミは（{p_str}曜）やな！\n次は「💨 スプレー缶・カセットボンベ」の曜日を選びや！"
-        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"スプレー:{p}")) for p in patterns_week]
-
-    elif user_message.startswith("スプレー:"):
-        p_str = user_message.split(":")[1][0]
-        spray = [day_map[p_str]] if p_str in day_map else []
-        USER_SETTINGS[user_id]["spray"] = spray
-        reply_text = f"スプレー缶は（{p_str}曜）やな！\n次は「🔋 乾電池・加熱式タバコ」の曜日を選びや！"
-        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"電池:{p}")) for p in patterns_week]
-
-    elif user_message.startswith("電池:"):
-        p_str = user_message.split(":")[1][0]
-        battery = [day_map[p_str]] if p_str in day_map else []
-        USER_SETTINGS[user_id]["battery"] = battery
-        reply_text = f"乾電池は（{p_str}曜）やな！\n次は「🍂 枝・葉・草（自然ゴミ）」の曜日を選びや！"
-        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"自然ゴミ:{p}")) for p in patterns_week]
-
-    elif user_message.startswith("自然ゴミ:"):
-        p_str = user_message.split(":")[1][0]
-        nature = [day_map[p_str]] if p_str in day_map else []
-        USER_SETTINGS[user_id]["nature"] = nature
-        reply_text = "全種類のゴミを叩き込んだわ！\n最後に、通知するタイミングを選びや！"
+        reply_text = "ほな、最後に通知するタイミングを選びや！\n「前日の夜」か「当日の朝」か、どっちがええ？"
         quick_reply_items = [
             QuickReplyItem(action=MessageAction(label="🌙 前日の夜にするわ", text="通知タイプ:夜")),
             QuickReplyItem(action=MessageAction(label="☀️ 当日の朝にするわ", text="通知タイプ:朝"))
@@ -410,7 +377,7 @@ def handle_message(event):
         time_setting = user_message.replace("通知時間:", "")
         if user_id not in USER_SETTINGS: USER_SETTINGS[user_id] = {"area": "札幌市北区"}
         USER_SETTINGS[user_id]["push_time"] = time_setting
-        reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\n全種類のゴミ情報を頭に叩き込んだからな、完璧に案内したるわ！"
+        reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\nウチからきっちり連絡入れたるからな！気ぃ引き締めや！"
 
     # いつでも確認機能
     elif user_id in USER_SETTINGS and "push_time" in USER_SETTINGS[user_id]:
