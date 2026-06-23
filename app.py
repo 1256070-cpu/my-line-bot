@@ -51,7 +51,7 @@ def get_weather_and_garbage(user_id):
         return None
         
     area_name = settings.get("area", "札幌市北区")
-    url = "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json" # デフォルト札幌
+    url = "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json"
     for key, value in REGION_CODES.items():
         if key in area_name:
             url = value
@@ -114,52 +114,3 @@ def get_weather_and_garbage(user_id):
             f"（設定：燃やせる={b_str} / プラ={p_str} / びん缶={bc_str} / 雑がみ={pa_str}({paper_week})）\n",
             f"📅今日 ({weekdays_ja[date_0.weekday()]}): {today_w}\n ┗ゴミ: {judge_garbage(date_0)}\n",
             f"📅明日 ({weekdays_ja[date_1.weekday()]}): {tomorrow_w}\n ┗ゴミ: {judge_garbage(date_1)}\n",
-            f"📅明後日 ({weekdays_ja[date_2.weekday()]}): {day_after_w}\n ┗ゴミ: {judge_garbage(date_2)}"
-        ]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"エラーが発生しました: {str(e)}"
-
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers.get('X-Line-Signature')
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
-@app.route("/morning-push", methods=['GET'])
-def morning_push():
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        for user_id in USER_SETTINGS.keys():
-            msg_text = get_weather_and_garbage(user_id)
-            if msg_text:
-                try:
-                    line_bot_api.push_message(
-                        PushMessageRequest(to=user_id, messages=[TextMessage(text=msg_text)])
-                    )
-                except Exception as e:
-                    print(f"Push failed for {user_id}: {e}")
-    return 'Push Sent'
-
-# 🌟友だち追加された瞬間に自動で挨拶と説明を送る
-@handler.add(FollowEvent)
-def handle_follow(event):
-    user_id = event.source.user_id
-    reply_text = "登録ありがとうございます！🎉\nお住まいの地域の「天気」と「ゴミの日」をまとめてお届けするボットです。\n\nまずは下のボタンを押して、初期設定を始めてください！"
-    quick_reply_items = [QuickReplyItem(action=MessageAction(label="⚙️ 初期設定を始める", text="初期設定"))]
-    
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_text, quick_reply=QuickReply(items=quick_reply_items))]
-            )
-        )
-
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message
