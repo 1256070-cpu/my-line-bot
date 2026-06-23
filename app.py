@@ -2,7 +2,7 @@ import os
 import sys
 import requests
 from datetime import datetime
-import zoneinfo # 日本時間を正確に計算するため
+import zoneinfo
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -23,7 +23,11 @@ if not channel_secret or not channel_access_token:
 configuration = Configuration(access_token=channel_access_token)
 handler = WebhookHandler(channel_secret)
 
-# 気象庁の地域コード（札幌市各区はすべて「石狩地方」なので016000でカバーできます）
+# ユーザーごとの設定を一時的に記憶する辞書（LINEのユーザーIDを鍵にします）
+# 構造の例: {"ユーザーID": {"area": "札幌市北区", "burnable": [0, 3], "resource": [2]}}
+USER_SETTINGS = {}
+
+# 気象庁コード（主要都市対応）
 REGION_CODES = {
     "札幌": "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json",
     "東京": "https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json",
@@ -31,7 +35,6 @@ REGION_CODES = {
 }
 
 def get_weather_detail(area_name):
-    # 「札幌市北区」「札幌市中央区」など、文字に「札幌」が入っていれば札幌のURLを選択
     url = None
     if "札幌" in area_name:
         url = REGION_CODES.get("札幌")
@@ -40,45 +43,34 @@ def get_weather_detail(area_name):
             if key in area_name:
                 url = value
                 break
-                
     if not url:
         return None
-        
     try:
         res = requests.get(url)
         if res.status_code != 200:
-            return f"天気データの取得に失敗しました。(Status: {res.status_code})"
-            
+            return None
         data = res.json()
-        
-        # エラーの元だった気温データは削除し、確実に取れる天気テキストのみを取得
-        weather_text = data[0]["timeSeries"][0]["areas"][0]["weathers"][0]
-        weather_text = weather_text.replace("\u3000", " ")
-        
+        weather_text = data[0]["timeSeries"][0]["areas"][0]["weathers"][0].replace("\u3000", " ")
         return f"【{area_name}の天気】\n今日：{weather_text}"
-    except Exception as e:
-        return f"天気データ解析エラー: {str(e)}"
+    except:
+        return None
 
-def get_garbage_info():
-    # 日本時間で現在の曜日を取得（月=0, 火=1, 水=2, 木=3, 金=4, 土=5, 日=6）
+def get_garbage_info(user_id):
     tz = zoneinfo.ZoneInfo("Asia/Tokyo")
-    now = datetime.now(tz)
-    weekday = now.weekday()
-    
-    # 曜日の日本語テキスト
+    weekday = datetime.now(tz).weekday()
     weekdays_ja = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日"]
-    today_weekday_str = weekdays_ja[weekday]
     
-    # 札幌市の一般的なゴミ収集日（例：月木が燃やせる、水が資源）の簡易判定
-    # ※後ほど、ユーザーごとに個別の曜日を設定できるように拡張します
-    if weekday == 0 or weekday == 3: # 月曜日または木曜日
+    # ユーザーの設定を取得（未登録ならデフォルト値）
+    settings = USER_SETTINGS.get(user_id, {"burnable": [0, 3], "resource": [2]})
+    
+    if weekday in settings["burnable"]:
         garbage_type = "🔥「燃やせるゴミ」"
-    elif weekday == 2: # 水曜日
+    elif weekday in settings["resource"]:
         garbage_type = "♻️「容器包装プラスチック・資源ゴミ」"
     else:
         garbage_type = "❌「本日のゴミ収集はありません」"
         
-    return f"【今日のゴミ出し情報】\n今日は {today_weekday_str} です。\n{garbage_type}"
+    return f"【今日のゴミ出し情報】\n今日は {weekdays_ja[weekday]} です。\n{garbage_type}"
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -92,17 +84,54 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+    user_id = event.source.user_id  # 話しかけてきた人の個別IDを取得
     user_message = event.message.text.strip()
     
-    # 天気情報の取得
-    weather_info = get_weather_detail(user_message)
-    
-    if weather_info:
-        # ゴミ情報の取得
-        garbage_info = get_garbage_info()
-        reply_text = f"{weather_info}\n\n{garbage_info}"
+    # 【新機能】「登録」から始まるメッセージで曜日を自由に変更できるようにする
+    # 入力例：「登録 月木」や「登録 火金」
+    if user_message.startswith("登録"):
+        try:
+            # 「登録」の後の文字を取得して曜日を判定
+            days_str = user_message.replace("登録", "").strip()
+            day_map = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
+            
+            burnable_days = [day_map[char] for char in days_str if char in day_map]
+            
+            if burnable_days:
+                if user_id not in USER_SETTINGS:
+                    USER_SETTINGS[user_id] = {"area": "札幌市北区", "burnable": [0, 3], "resource": [2]}
+                
+                USER_SETTINGS[user_id]["burnable"] = burnable_days
+                reply_text = f"⚙️ ゴミの曜日を更新しました！\n燃やせるゴミ：{days_str}"
+            else:
+                reply_text = "曜日の指定がうまく読み取れませんでした。\n「登録 月木」のように送ってください。"
+        except Exception as e:
+            reply_text = f"登録エラーが発生しました。"
+            
     else:
-        reply_text = f"「{user_message}」ですね！\n\n「札幌市中央区」や「札幌市北区」のように送ると、その地域の天気と今日のゴミ出し情報をセットで返します！"
+        # 通常の天気・ゴミの確認
+        weather_info = get_weather_detail(user_message)
+        
+        if weather_info:
+            # ユーザーが送ってきた区の情報をその人の設定として上書き保存
+            if user_id not in USER_SETTINGS:
+                USER_SETTINGS[user_id] = {"area": user_message, "burnable": [0, 3], "resource": [2]}
+            else:
+                USER_SETTINGS[user_id]["area"] = user_message
+                
+            garbage_info = get_garbage_info(user_id)
+            reply_text = f"{weather_info}\n\n{garbage_info}"
+        else:
+            # 地域が未登録の場合の案内
+            settings = USER_SETTINGS.get(user_id)
+            if settings:
+                # 登録済みの地域があれば、文字は何でもその地域の情報を返す
+                saved_area = settings["area"]
+                weather_info = get_weather_detail(saved_area)
+                garbage_info = get_garbage_info(user_id)
+                reply_text = f"現在の登録地：{saved_area}\n\n{weather_info}\n\n{garbage_info}"
+            else:
+                reply_text = "「札幌市北区」のように送ると、その地域の天気とゴミ情報を確認できます！\n\nまた、「登録 火金」のように送ると、あなたの燃やせるゴミの曜日を自由に変更できます。"
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
