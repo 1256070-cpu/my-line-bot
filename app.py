@@ -1,6 +1,7 @@
 import os
 import sys
 import requests
+import traceback  # エラーの場所を完全に特定するためのライブラリ
 from datetime import datetime, timedelta
 import zoneinfo
 from flask import Flask, request, abort
@@ -23,32 +24,21 @@ if not channel_secret or not channel_access_token:
 configuration = Configuration(access_token=channel_access_token)
 handler = WebhookHandler(channel_secret)
 
-# ユーザーごとの設定を記憶する辞書
 USER_SETTINGS = {}
 
-# 気象庁コード
 REGION_CODES = {
     "札幌": "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json",
     "東京": "https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json",
     "大阪": "https://www.jma.go.jp/bosai/forecast/data/forecast/270000.json"
 }
 
-# 【新機能】札幌市の住所のキーワードに応じたゴミの日自動判定ルール
-# 0=月, 1=火, 2=水, 3=木, 4=金, 5=土, 6=日
 def judge_garbage_days_by_address(address):
-    # デフォルトは火・金（燃やせる）、水（プラ）
     result = {"burnable": [1, 4], "resource": [2]}
-    
-    # 住所の文字を見て、月・木ルートの地域を自動判別
-    # 例：あいの里、拓北、篠路、屯田の一部など（実際のカレンダーに合わせて後からいくらでも増やせます）
     monthly_thursday_keywords = ["あいの里", "拓北", "篠路", "茨戸", "太平"]
-    
     for kw in monthly_thursday_keywords:
         if kw in address:
-            result["burnable"] = [0, 3] # 月・木に変更
-            result["resource"] = [2]    # 水（プラ）
+            result["burnable"] = [0, 3]
             break
-            
     return result
 
 def get_weather_and_garbage(area_name, user_id):
@@ -61,14 +51,16 @@ def get_weather_and_garbage(area_name, user_id):
                 url = value
                 break
     if not url:
-        return None
+        print(f"DEBUG: URLが見つかりません。入力された文字: {area_name}")
+        return f"地域「{area_name}」の天気URLが見つかりませんでした。"
 
     try:
         res = requests.get(url)
+        print(f"DEBUG: 天気サーバー応答ステータス: {res.status_code}")
         if res.status_code != 200:
-            return None
+            return "天気データの取得に失敗しました。"
+            
         data = res.json()
-        
         weathers = data[0]["timeSeries"][0]["areas"][0]["weathers"]
         today_w = weathers[0].replace("\u3000", " ")
         tomorrow_w = weathers[1].replace("\u3000", " ") if len(weathers) > 1 else "データなし"
@@ -78,7 +70,6 @@ def get_weather_and_garbage(area_name, user_id):
         now_tokyo = datetime.now(tz)
         weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
         
-        # ユーザーに紐づいたゴミの日設定を取得
         settings = USER_SETTINGS.get(user_id, {"burnable": [1, 4], "resource": [2]})
         burnable_days = settings["burnable"]
         resource_days = settings["resource"]
@@ -96,18 +87,19 @@ def get_weather_and_garbage(area_name, user_id):
         date_1 = now_tokyo + timedelta(days=1)
         date_2 = now_tokyo + timedelta(days=2)
 
-        msg = f"【{area_name}の案内】\n"
-        # 燃やせるゴミの曜日を分かりやすく表示
         b_days_str = "・".join([weekdays_ja[d] for d in burnable_days])
-        msg += f"（設定された燃やせるゴミの日: {b_days_str}）\n\n"
         
+        msg = f"【{area_name}の案内】\n"
+        msg += f"（設定された燃やせるゴミの日: {b_days_str}）\n\n"
         msg += f"📅今日 ({weekdays_ja[date_0.weekday()]}): {today_w}\n ┗ゴミ: {judge_garbage(date_0)}\n\n"
         msg += f"📅明日 ({weekdays_ja[date_1.weekday()]}): {tomorrow_w}\n ┗ゴミ: {judge_garbage(date_1)}\n\n"
         msg += f"📅明後日 ({weekdays_ja[date_2.weekday()]}): {day_after_w}\n ┗ゴミ: {judge_garbage(date_2)}"
         
         return msg
-    except:
-        return None
+    except Exception as e:
+        print("DEBUG: 天気・ゴミデータ処理中にエラー発生！")
+        print(traceback.format_exc()) # エラー内容をログに全部出す
+        return f"データ処理中にエラーが発生しました: {str(e)}"
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -122,3 +114,43 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_id = event.source.user_id
+    user_message = event.message.text.strip()
+    
+    print(f"DEBUG: 受信メッセージ: {user_message}")
+    
+    is_sapporo = "札幌" in user_message
+    
+    if is_sapporo:
+        garbage_rule = judge_garbage_days_by_address(user_message)
+        USER_SETTINGS[user_id] = {
+            "area": user_message,
+            "burnable": garbage_rule["burnable"],
+            "resource": garbage_rule["resource"]
+        }
+        reply_text = get_weather_and_garbage(user_message, user_id)
+    else:
+        settings = USER_SETTINGS.get(user_id)
+        if settings:
+            saved_area = settings["area"]
+            reply_text = get_weather_and_garbage(saved_area, user_id)
+        else:
+            reply_text = "お住まいの地域を「札幌市北区あいの里」のように送ってください！"
+
+    print(f"DEBUG: LINEに返信するテキスト:\n{reply_text}")
+
+    try:
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=reply_text)]
+                )
+            )
+        print("DEBUG: LINEへの送信処理が完了しました。")
+    except Exception as e:
+        print("DEBUG: LINEへの送信中に致命的なエラーが発生しました！")
+        print(traceback.format_exc())
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=8000)
