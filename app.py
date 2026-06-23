@@ -70,9 +70,9 @@ def judge_garbage(target_date, settings):
         
     return "・".join(g_list) if g_list else "❌何もないわ！"
 
-def get_weather_and_garbage(user_id):
+def get_weather_and_garbage(user_id, is_tomorrow=False):
     settings = USER_SETTINGS.get(user_id)
-    if not settings or "paper_week" not in settings:
+    if not settings or "push_time" not in settings:
         return None
         
     area_name = settings.get("area", "札幌市北区")
@@ -94,9 +94,8 @@ def get_weather_and_garbage(user_id):
         weathers = data[0]["timeSeries"][0]["areas"][0]["weathers"]
         today_w = weathers[0].replace("\u3000", " ")
         tomorrow_w = weathers[1].replace("\u3000", " ") if len(weathers) > 1 else "わからん"
-        day_after_w = weathers[2].replace("\u3000", " ") if len(weathers) > 2 else "わからん"
     except Exception:
-        today_w, tomorrow_w, day_after_w = "データなし", "データなし", "データなし"
+        today_w, tomorrow_w = "データなし", "データなし"
         
     temp_text_today = ""
     temp_text_tomorrow = ""
@@ -116,18 +115,27 @@ def get_weather_and_garbage(user_id):
     now_tokyo = datetime.now(tz)
     weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
     
-    date_0 = now_tokyo
-    date_1 = now_tokyo + timedelta(days=1)
-    date_2 = now_tokyo + timedelta(days=2)
-    
-    lines = [
-        f"【{area_name}の案内や代ぇ！】",
-        "おっしゃ、今日の天気とゴミ情報教えたるわ！\n",
-        f"📅今日 ({weekdays_ja[date_0.weekday()]}): {today_w}{temp_text_today}\n ┗ ゴミ: {judge_garbage(date_0, settings)}\n",
-        f"📅明日 ({weekdays_ja[date_1.weekday()]}): {tomorrow_w}{temp_text_tomorrow}\n ┗ ゴミ: {judge_garbage(date_1, settings)}\n",
-        f"📅明後日 ({weekdays_ja[date_2.weekday()]}): {day_after_w}\n ┗ ゴミ: {judge_garbage(date_2, settings)}\n",
-        "うかうかしとったらゴミ出し遅れるでぇ！気ぃ引き締めや！"
-    ]
+    if is_tomorrow:
+        target_date = now_tokyo + timedelta(days=1)
+        lines = [
+            f"【{area_name}の夜回りやでぇ！】",
+            "夜遅くにすまんな！明日のゴミ出しの準備はできとるか？\n",
+            f"📅明日 ({weekdays_ja[target_date.weekday()]}): {tomorrow_w}{temp_text_tomorrow}",
+            f" ┗ 出すゴミ: {judge_garbage(target_date, settings)}\n",
+            "うかうかしとったら、明日の朝ゴミ出し遅れるでぇ！",
+            "準備できたら下のボタン押しや！"
+        ]
+    else:
+        target_date = now_tokyo
+        lines = [
+            f"【{area_name}の朝の挨拶やでぇ！】",
+            "おっしゃ、今日の天気とゴミ情報教えたるわ！おんどれ起きや！\n",
+            f"📅今日 ({weekdays_ja[target_date.weekday()]}): {today_w}{temp_text_today}",
+            f" ┗ 出すゴミ: {judge_garbage(target_date, settings)}\n",
+            "しっかりゴミ出して、シャキッと働きや！",
+            "出したら下のボタン押しや！"
+        ]
+        
     return "\n".join(lines)
 
 @app.route("/callback", methods=['POST'])
@@ -142,17 +150,42 @@ def callback():
 
 @app.route("/morning-push", methods=['GET'])
 def morning_push():
+    tz = zoneinfo.ZoneInfo("Asia/Tokyo")
+    current_hour = datetime.now(tz).hour
+    
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
-        for user_id in USER_SETTINGS.keys():
-            msg_text = get_weather_and_garbage(user_id)
-            if msg_text:
-                try:
-                    line_bot_api.push_message(
-                        PushMessageRequest(to=user_id, messages=[TextMessage(text=msg_text)])
-                    )
-                except Exception as e:
-                    print(f"Push failed for {user_id}: {e}")
+        for user_id, settings in USER_SETTINGS.items():
+            push_time = settings.get("push_time")
+            if not push_time:
+                continue
+                
+            is_match = False
+            is_tomorrow = False
+            
+            if push_time.startswith("前日夜"):
+                target_hour = int(push_time.replace("前日夜:", "").replace("時", ""))
+                if current_hour == target_hour:
+                    is_match = True
+                    is_tomorrow = True
+            elif push_time.startswith("当日朝"):
+                target_hour = int(push_time.replace("当日朝:", "").replace("時", ""))
+                if current_hour == target_hour:
+                    is_match = True
+                    
+            if is_match:
+                msg_text = get_weather_and_garbage(user_id, is_tomorrow=is_tomorrow)
+                if msg_text:
+                    try:
+                        quick_reply_items = [QuickReplyItem(action=MessageAction(label="👍 出したで！", text="ゴミ出したで！"))]
+                        line_bot_api.push_message(
+                            PushMessageRequest(
+                                to=user_id, 
+                                messages=[TextMessage(text=msg_text, quick_reply=QuickReply(items=quick_reply_items))]
+                            )
+                        )
+                    except Exception as e:
+                        print(f"Push failed for {user_id}: {e}")
     return 'Push Sent'
 
 @handler.add(FollowEvent)
@@ -180,7 +213,10 @@ def handle_message(event):
     day_map = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
     patterns_week = ["月曜", "火曜", "水曜", "木曜", "金曜"]
 
-    if user_message in ["初期設定", "設定"]:
+    if user_message == "ゴミ出したで！":
+        reply_text = "おぅ、ちゃんと出せたみたいやな。明日も遅れんとキリキリ働きや！"
+
+    elif user_message in ["初期設定", "設定"]:
         reply_text = "おんどれの住んどる地域はどっちや？選べや！"
         quick_reply_items = [
             QuickReplyItem(action=MessageAction(label="札幌市や", text="地域選択:札幌市")),
@@ -258,11 +294,39 @@ def handle_message(event):
         if user_id not in USER_SETTINGS: USER_SETTINGS[user_id] = {"area": "札幌市北区"}
         USER_SETTINGS[user_id]["paper_week"] = freq
         
-        reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\n知りたい時はなんか適当に文字送ってくれたら、いつでもウチがゴミの日教えたるからな！"
+        reply_text = "ほな、最後に通知するタイミングを選びや！\n「前日の夜」か「当日の朝」か、どっちがええ？"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="🌙 前日の夜にするわ", text="通知タイプ:夜")),
+            QuickReplyItem(action=MessageAction(label="☀️ 当日の朝にするわ", text="通知タイプ:朝"))
+        ]
+
+    elif user_message == "通知タイプ:夜":
+        reply_text = "前日の夜やな！何時頃に鳴らしたらええ？"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="20:00頃", text="通知時間:前日夜:20時")),
+            QuickReplyItem(action=MessageAction(label="21:00頃", text="通知時間:前日夜:21時")),
+            QuickReplyItem(action=MessageAction(label="22:00頃", text="通知時間:前日夜:22時"))
+        ]
+
+    elif user_message == "通知タイプ:朝":
+        reply_text = "当日の朝やな！何時頃に起こしたらええ？"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="06:00頃", text="通知時間:当日朝:6時")),
+            QuickReplyItem(action=MessageAction(label="07:00頃", text="通知時間:当日朝:7時")),
+            QuickReplyItem(action=MessageAction(label="08:00頃", text="通知時間:当日朝:8時"))
+        ]
+
+    elif user_message.startswith("通知時間:"):
+        time_setting = user_message.replace("通知時間:", "")
+        if user_id not in USER_SETTINGS: USER_SETTINGS[user_id] = {"area": "札幌市北区"}
+        USER_SETTINGS[user_id]["push_time"] = time_setting
+        
+        reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\n選んでもらった時間帯にウチからきっちり連絡入れたるからな！気ぃ引き締めや！"
 
     else:
-        if user_id in USER_SETTINGS and "paper_week" in USER_SETTINGS[user_id]:
-            msg_text = get_weather_and_garbage(user_id)
+        if user_id in USER_SETTINGS and "push_time" in USER_SETTINGS[user_id]:
+            is_tomorrow = USER_SETTINGS[user_id]["push_time"].startswith("前日夜")
+            msg_text = get_weather_and_garbage(user_id, is_tomorrow=is_tomorrow)
             reply_text = msg_text if msg_text else "データうまく取れんかったわ、すまんな！"
         else:
             reply_text = "地域の設定がまだやで！\n下のボタン押すか、「初期設定」って送って設定しぃや！"
