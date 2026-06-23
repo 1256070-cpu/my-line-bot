@@ -38,7 +38,8 @@ REGION_CODES = {
 SAPPORO_WARDS = ["中央区", "北区", "東区", "白石区", "厚別区", "豊平区", "清田区", "南区", "西区", "手稲区"]
 
 def get_weather_and_garbage(user_id):
-    settings = USER_SETTINGS.get(user_id, {"area": "札幌市北区", "burnable": [2, 5], "plastic": [3], "resource": [4]})
+    # デフォルト値
+    settings = USER_SETTINGS.get(user_id, {"area": "札幌市北区", "burnable": [2, 5], "plastic": [3], "bottle_can": [4], "paper": [4]})
     area_name = settings.get("area", "札幌市北区")
     
     url = REGION_CODES.get("札幌")
@@ -64,16 +65,23 @@ def get_weather_and_garbage(user_id):
         
         burnable_days = settings.get("burnable", [2, 5])
         plastic_days = settings.get("plastic", [3])
-        resource_days = settings.get("resource", [4])
+        bottle_can_days = settings.get("bottle_can", [4])
+        paper_days = settings.get("paper", [4])
 
         def judge_garbage(target_date):
             w_idx = target_date.weekday()
+            g_list = []
             if w_idx in burnable_days:
-                return "🔥燃やせるゴミ"
-            elif w_idx in plastic_days:
-                return "♻️容器包装プラスチック"
-            elif w_idx in resource_days:
-                return "💎資源ゴミ（雑がみ・缶・ペット等）"
+                g_list.append("🔥燃やせるゴミ")
+            if w_idx in plastic_days:
+                g_list.append("♻️容器包装プラスチック")
+            if w_idx in bottle_can_days:
+                g_list.append("🍾びん・缶・ペット")
+            if w_idx in paper_days:
+                g_list.append("📰雑がみ・新聞・段ボール")
+                
+            if g_list:
+                return "・".join(g_list)
             else:
                 return "❌なし"
 
@@ -83,12 +91,12 @@ def get_weather_and_garbage(user_id):
 
         b_str = "・".join([weekdays_ja[d] for d in burnable_days])
         p_str = "・".join([weekdays_ja[d] for d in plastic_days])
-        r_str = "・".join([weekdays_ja[d] for d in resource_days])
+        bc_str = "・".join([weekdays_ja[d] for d in bottle_can_days])
+        pa_str = "・".join([weekdays_ja[d] for d in paper_days])
         
-        # エラーが起きないよう、1行ずつ綺麗に組み立てる方式に変更しました
         lines = [
             f"【{area_name}の案内】",
-            f"（設定：燃やせる={b_str} / プラ={p_str} / 資源={r_str}）\n",
+            f"（設定：燃やせる={b_str} / プラ={p_str} / びん缶={bc_str} / 雑がみ={pa_str}）\n",
             f"📅今日 ({weekdays_ja[date_0.weekday()]}): {today_w}\n ┗ゴミ: {judge_garbage(date_0)}\n",
             f"📅明日 ({weekdays_ja[date_1.weekday()]}): {tomorrow_w}\n ┗ゴミ: {judge_garbage(date_1)}\n",
             f"📅明後日 ({weekdays_ja[date_2.weekday()]}): {day_after_w}\n ┗ゴミ: {judge_garbage(date_2)}"
@@ -115,6 +123,7 @@ def handle_message(event):
     reply_text = ""
     quick_reply_items = []
     day_map = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
+    patterns_week = ["月曜", "火曜", "水曜", "木曜", "金曜"]
 
     # 1. 初期設定スタート（区を選択）
     if user_message in ["初期設定", "設定"]:
@@ -123,7 +132,7 @@ def handle_message(event):
             QuickReplyItem(action=MessageAction(label=ward, text=f"区選択:{ward}")) for ward in SAPPORO_WARDS
         ]
         
-    # 2. 区選択
+    # 2. 区選択 -> 燃やせるゴミ
     elif user_message.startswith("区選択:"):
         ward = user_message.split(":")[1]
         USER_SETTINGS[user_id] = {"area": f"札幌市{ward}"}
@@ -134,7 +143,7 @@ def handle_message(event):
             QuickReplyItem(action=MessageAction(label=p, text=f"燃やせる:{p}")) for p in patterns
         ]
 
-    # 3. 燃やせるゴミ選択
+    # 3. 燃やせるゴミ選択 -> プラスチック
     elif user_message.startswith("燃やせる:"):
         p_str = user_message.split(":")[1]
         burnable_days = [day_map[char] for char in p_str if char in day_map]
@@ -144,12 +153,11 @@ def handle_message(event):
         USER_SETTINGS[user_id]["burnable"] = burnable_days
         
         reply_text = f"燃やせるゴミ（{p_str}）を設定しました。\n次に「容器包装プラスチック」の曜日を選んでください！"
-        patterns = ["月曜", "火曜", "水曜", "木曜", "金曜"]
         quick_reply_items = [
-            QuickReplyItem(action=MessageAction(label=p, text=f"プラ:{p}")) for p in patterns
+            QuickReplyItem(action=MessageAction(label=p, text=f"プラ:{p}")) for p in patterns_week
         ]
 
-    # 4. プラスチック選択
+    # 4. プラスチック選択 -> びん・缶・ペットボトル
     elif user_message.startswith("プラ:"):
         p_str = user_message.split(":")[1][0]
         plastic_day = [day_map[p_str]]
@@ -158,26 +166,39 @@ def handle_message(event):
             USER_SETTINGS[user_id] = {"area": "札幌市北区", "burnable": [2, 5]}
         USER_SETTINGS[user_id]["plastic"] = plastic_day
         
-        reply_text = f"容器包装プラスチック（{p_str}曜）を設定しました。\n最後に「資源ゴミ（雑がみ・缶・ペット等）」の曜日を選んでください！"
-        patterns = ["月曜", "火曜", "水曜", "木曜", "金曜"]
+        reply_text = f"容器包装プラスチック（{p_str}曜）を設定しました。\n次に「びん・缶・ペットボトル」の曜日を選んでください！"
         quick_reply_items = [
-            QuickReplyItem(action=MessageAction(label=p, text=f"資源:{p}")) for p in patterns
+            QuickReplyItem(action=MessageAction(label=p, text=f"びん缶:{p}")) for p in patterns_week
         ]
 
-    # 5. 資源ゴミ選択（設定完了）
-    elif user_message.startswith("資源:"):
+    # 5. びん・缶・ペットボトル選択 -> 雑がみ・紙類
+    elif user_message.startswith("びん缶:"):
+        bc_str = user_message.split(":")[1][0]
+        bottle_can_day = [day_map[bc_str]]
+        
+        if user_id not in USER_SETTINGS:
+            USER_SETTINGS[user_id] = {"area": "札幌市北区", "burnable": [2, 5], "plastic": [3]}
+        USER_SETTINGS[user_id]["bottle_can"] = bottle_can_day
+        
+        reply_text = f"びん・缶・ペットボトル（{bc_str}曜）を設定しました。\n最後に「雑がみ・新聞・段ボール」の曜日を選んでください！"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label=p, text=f"雑がみ:{p}")) for p in patterns_week
+        ]
+
+    # 6. 雑がみ選択（すべての設定が完了）
+    elif user_message.startswith("雑がみ:"):
         r_str = user_message.split(":")[1][0]
         resource_day = [day_map[r_str]]
         
         if user_id not in USER_SETTINGS:
-            USER_SETTINGS[user_id] = {"area": "札幌市北区", "burnable": [2, 5], "plastic": [3]}
-        USER_SETTINGS[user_id]["resource"] = resource_day
+            USER_SETTINGS[user_id] = {"area": "札幌市北区", "burnable": [2, 5], "plastic": [3], "bottle_can": [4]}
+        USER_SETTINGS[user_id]["paper"] = resource_day
         
-        reply_text = "🎉 すべての設定が完了しました！\n\n次からは、何か文字（「あ」など）を送るだけで、あなた専用の3日分の天気と、すべてのゴミ出し情報をいつでも確認できます。"
+        reply_text = "🎉 すべての設定が完了しました！\n\n次からは、何か文字（「あ」など）を送るだけで、あなた専用の3日分の天気と、細かく分かれたすべてのゴミ出し情報をいつでも確認できます。"
 
-    # 6. 通常時
+    # 7. 通常時
     else:
-        if user_id in USER_SETTINGS and "resource" in USER_SETTINGS[user_id]:
+        if user_id in USER_SETTINGS and "paper" in USER_SETTINGS[user_id]:
             reply_text = get_weather_and_garbage(user_id)
         else:
             reply_text = "ご利用ありがとうございます！\nまずはあなたの地域を設定しましょう。\n\n下のボタンを押すか、「初期設定」と送ってください。"
