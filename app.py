@@ -1,8 +1,8 @@
 import os
 import sys
 import requests
-from datetime import datetime
-import zoneinfo # 日本時間を正確に計算するため
+from datetime import datetime, timedelta
+import zoneinfo
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -31,7 +31,7 @@ REGION_CODES = {
     "大阪": "https://www.jma.go.jp/bosai/forecast/data/forecast/270000.json"
 }
 
-def get_weather_detail(area_name):
+def get_weather_and_garbage(area_name, user_id):
     url = None
     if "札幌" in area_name:
         url = REGION_CODES.get("札幌")
@@ -42,39 +42,50 @@ def get_weather_detail(area_name):
                 break
     if not url:
         return None
+
     try:
         res = requests.get(url)
         if res.status_code != 200:
-            return None
+            return f"天気データの取得に失敗しました。"
         data = res.json()
-        weather_text = data[0]["timeSeries"][0]["areas"][0]["weathers"][0].replace("\u3000", " ")
-        return f"【{area_name}の天気】\n今日：{weather_text}"
-    except:
-        return None
-
-def get_garbage_info(user_id):
-    # ★ ここを修正しました：サーバーの時間ではなく、確実に「日本時間」で計算します
-    tz = zoneinfo.ZoneInfo("Asia/Tokyo")
-    now_tokyo = datetime.now(tz)
-    weekday = now_tokyo.weekday() # これで確実に日本の今の曜日（火曜日など）になります
-    
-    weekdays_ja = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日"]
-    
-    settings = USER_SETTINGS.get(user_id, {"burnable": [0, 3], "resource": [2]})
-    
-    # 札幌市北区などは「火曜日・金曜日」が燃やせるゴミですので、デフォルトの判定を火金（1と4）に合わせます
-    # ※もし「月木」の場合は、LINE側で「登録 月木」と送ればいつでも変更できます
-    burnable_days = settings.get("burnable", [1, 4]) # 初期値を火金(1, 4)に変更
-    resource_days = settings.get("resource", [2])    # 水曜
-    
-    if weekday in burnable_days:
-        garbage_type = "🔥「燃やせるゴミ」"
-    elif weekday in resource_days:
-        garbage_type = "♻️「容器包装プラスチック・資源ゴミ」"
-    else:
-        garbage_type = "❌「本日のゴミ収集はありません」"
         
-    return f"【今日のゴミ出し情報】\n今日は {weekdays_ja[weekday]} です。\n{garbage_type}"
+        # 気象庁から今日、明日、明後日の天気を取得
+        weathers = data[0]["timeSeries"][0]["areas"][0]["weathers"]
+        today_w = weathers[0].replace("\u3000", " ")
+        tomorrow_w = weathers[1].replace("\u3000", " ") if len(weathers) > 1 else "データなし"
+        day_after_w = weathers[2].replace("\u3000", " ") if len(weathers) > 2 else "データなし"
+        
+        # 日本時間での曜日計算用の準備
+        tz = zoneinfo.ZoneInfo("Asia/Tokyo")
+        now_tokyo = datetime.now(tz)
+        
+        weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
+        settings = USER_SETTINGS.get(user_id, {"burnable": [1, 4], "resource": [2]})
+        burnable_days = settings.get("burnable", [1, 4])
+        resource_days = settings.get("resource", [2])
+
+        def judge_garbage(target_date):
+            w_idx = target_date.weekday()
+            if w_idx in burnable_days:
+                return f"🔥燃やせるゴミ"
+            elif w_idx in resource_days:
+                return f"♻️プラ・資源"
+            else:
+                return f"❌なし"
+
+        # 3日分の日付とゴミを判定
+        date_0 = now_tokyo
+        date_1 = now_tokyo + timedelta(days=1)
+        date_2 = now_tokyo + timedelta(days=2)
+
+        msg = f"【{area_name}の案内】\n\n"
+        msg += f"📅今日 ({weekdays_ja[date_0.weekday()]}): {today_w}\n ┗ゴミ: {judge_garbage(date_0)}\n\n"
+        msg += f"📅明日 ({weekdays_ja[date_1.weekday()]}): {tomorrow_w}\n ┗ゴミ: {judge_garbage(date_1)}\n\n"
+        msg += f"📅明後日 ({weekdays_ja[date_2.weekday()]}): {day_after_w}\n ┗ゴミ: {judge_garbage(date_2)}"
+        
+        return msg
+    except Exception as e:
+        return f"データ解析エラーが発生しました。詳細: {str(e)}"
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -109,34 +120,16 @@ def handle_message(event):
             reply_text = f"登録エラーが発生しました。"
             
     else:
-        weather_info = get_weather_detail(user_message)
+        # 入力されたテキストを地域として判定させて、3日分のメッセージを作る
+        # すでに登録済みの人なら、何を送っても登録地で計算
+        settings = USER_SETTINGS.get(user_id)
+        area_to_check = user_message
         
-        if weather_info:
+        if not REGION_CODES.get(user_message[:2]) and settings:
+            area_to_check = settings["area"]
+
+        info_msg = get_weather_and_garbage(area_to_check, user_id)
+        
+        if info_msg:
             if user_id not in USER_SETTINGS:
-                USER_SETTINGS[user_id] = {"area": user_message, "burnable": [1, 4], "resource": [2]}
-            else:
-                USER_SETTINGS[user_id]["area"] = user_message
-                
-            garbage_info = get_garbage_info(user_id)
-            reply_text = f"{weather_info}\n\n{garbage_info}"
-        else:
-            settings = USER_SETTINGS.get(user_id)
-            if settings:
-                saved_area = settings["area"]
-                weather_info = get_weather_detail(saved_area)
-                garbage_info = get_garbage_info(user_id)
-                reply_text = f"現在の登録地：{saved_area}\n\n{weather_info}\n\n{garbage_info}"
-            else:
-                reply_text = "「札幌市北区」のように送ると、その地域の天気とゴミ情報を確認できます！\n\nまた、「登録 火金」のように送ると、あなたの燃やせるゴミの曜日を自由に変更できます。"
-
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_text)]
-            )
-        )
-
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8000)
+                USER_SETTINGS
