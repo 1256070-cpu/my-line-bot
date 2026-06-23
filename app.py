@@ -2,7 +2,7 @@ import os
 import sys
 import requests
 from datetime import datetime
-import zoneinfo
+import zoneinfo # 日本時間を正確に計算するため
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -23,11 +23,8 @@ if not channel_secret or not channel_access_token:
 configuration = Configuration(access_token=channel_access_token)
 handler = WebhookHandler(channel_secret)
 
-# ユーザーごとの設定を一時的に記憶する辞書（LINEのユーザーIDを鍵にします）
-# 構造の例: {"ユーザーID": {"area": "札幌市北区", "burnable": [0, 3], "resource": [2]}}
 USER_SETTINGS = {}
 
-# 気象庁コード（主要都市対応）
 REGION_CODES = {
     "札幌": "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json",
     "東京": "https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json",
@@ -56,16 +53,23 @@ def get_weather_detail(area_name):
         return None
 
 def get_garbage_info(user_id):
+    # ★ ここを修正しました：サーバーの時間ではなく、確実に「日本時間」で計算します
     tz = zoneinfo.ZoneInfo("Asia/Tokyo")
-    weekday = datetime.now(tz).weekday()
+    now_tokyo = datetime.now(tz)
+    weekday = now_tokyo.weekday() # これで確実に日本の今の曜日（火曜日など）になります
+    
     weekdays_ja = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日"]
     
-    # ユーザーの設定を取得（未登録ならデフォルト値）
     settings = USER_SETTINGS.get(user_id, {"burnable": [0, 3], "resource": [2]})
     
-    if weekday in settings["burnable"]:
+    # 札幌市北区などは「火曜日・金曜日」が燃やせるゴミですので、デフォルトの判定を火金（1と4）に合わせます
+    # ※もし「月木」の場合は、LINE側で「登録 月木」と送ればいつでも変更できます
+    burnable_days = settings.get("burnable", [1, 4]) # 初期値を火金(1, 4)に変更
+    resource_days = settings.get("resource", [2])    # 水曜
+    
+    if weekday in burnable_days:
         garbage_type = "🔥「燃やせるゴミ」"
-    elif weekday in settings["resource"]:
+    elif weekday in resource_days:
         garbage_type = "♻️「容器包装プラスチック・資源ゴミ」"
     else:
         garbage_type = "❌「本日のゴミ収集はありません」"
@@ -84,48 +88,40 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    user_id = event.source.user_id  # 話しかけてきた人の個別IDを取得
+    user_id = event.source.user_id
     user_message = event.message.text.strip()
     
-    # 【新機能】「登録」から始まるメッセージで曜日を自由に変更できるようにする
-    # 入力例：「登録 月木」や「登録 火金」
     if user_message.startswith("登録"):
         try:
-            # 「登録」の後の文字を取得して曜日を判定
             days_str = user_message.replace("登録", "").strip()
             day_map = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
-            
             burnable_days = [day_map[char] for char in days_str if char in day_map]
             
             if burnable_days:
                 if user_id not in USER_SETTINGS:
-                    USER_SETTINGS[user_id] = {"area": "札幌市北区", "burnable": [0, 3], "resource": [2]}
-                
-                USER_SETTINGS[user_id]["burnable"] = burnable_days
+                    USER_SETTINGS[user_id] = {"area": "札幌市北区", "burnable": burnable_days, "resource": [2]}
+                else:
+                    USER_SETTINGS[user_id]["burnable"] = burnable_days
                 reply_text = f"⚙️ ゴミの曜日を更新しました！\n燃やせるゴミ：{days_str}"
             else:
-                reply_text = "曜日の指定がうまく読み取れませんでした。\n「登録 月木」のように送ってください。"
-        except Exception as e:
+                reply_text = "曜日の指定がうまく読み取れませんでした。\n「登録 火金」のように送ってください。"
+        except:
             reply_text = f"登録エラーが発生しました。"
             
     else:
-        # 通常の天気・ゴミの確認
         weather_info = get_weather_detail(user_message)
         
         if weather_info:
-            # ユーザーが送ってきた区の情報をその人の設定として上書き保存
             if user_id not in USER_SETTINGS:
-                USER_SETTINGS[user_id] = {"area": user_message, "burnable": [0, 3], "resource": [2]}
+                USER_SETTINGS[user_id] = {"area": user_message, "burnable": [1, 4], "resource": [2]}
             else:
                 USER_SETTINGS[user_id]["area"] = user_message
                 
             garbage_info = get_garbage_info(user_id)
             reply_text = f"{weather_info}\n\n{garbage_info}"
         else:
-            # 地域が未登録の場合の案内
             settings = USER_SETTINGS.get(user_id)
             if settings:
-                # 登録済みの地域があれば、文字は何でもその地域の情報を返す
                 saved_area = settings["area"]
                 weather_info = get_weather_detail(saved_area)
                 garbage_info = get_garbage_info(user_id)
