@@ -1,6 +1,8 @@
 import os
 import sys
 import requests
+from datetime import datetime
+import zoneinfo # 日本時間を正確に計算するため
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -21,33 +23,62 @@ if not channel_secret or not channel_access_token:
 configuration = Configuration(access_token=channel_access_token)
 handler = WebhookHandler(channel_secret)
 
-# 地域ごとの気象庁コード（詳細版への布石）
-# 札幌一括ではなく、今後ユーザーごとに地域コードを切り替えられるようにします
+# 気象庁の地域コード（札幌市各区はすべて「石狩地方」なので016000でカバーできます）
 REGION_CODES = {
-    "札幌": "016000", # 石狩地方
-    "東京": "130000",
-    "大阪": "270000"
+    "札幌": "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json",
+    "東京": "https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json",
+    "大阪": "https://www.jma.go.jp/bosai/forecast/data/forecast/270000.json"
 }
 
 def get_weather_detail(area_name):
-    # 現状は「札幌」が含まれていれば石狩地方のデータを取得
-    code = REGION_CODES.get("札幌") if "札幌" in area_name else REGION_CODES.get(area_name)
-    if not code:
+    # 「札幌市北区」「札幌市中央区」など、文字に「札幌」が入っていれば札幌のURLを選択
+    url = None
+    if "札幌" in area_name:
+        url = REGION_CODES.get("札幌")
+    else:
+        for key, value in REGION_CODES.items():
+            if key in area_name:
+                url = value
+                break
+                
+    if not url:
         return None
+        
     try:
-        url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{code}.json"
-        res = requests.get(url).json()
+        res = requests.get(url)
+        if res.status_code != 200:
+            return f"天気データの取得に失敗しました。(Status: {res.status_code})"
+            
+        data = res.json()
         
-        # 今日・明日の天気と気温を取得
-        weather_text = res[0]["timeSeries"][0]["areas"][0]["weathers"][0].replace("\u3000", " ")
+        # エラーの元だった気温データは削除し、確実に取れる天気テキストのみを取得
+        weather_text = data[0]["timeSeries"][0]["areas"][0]["weathers"][0]
+        weather_text = weather_text.replace("\u3000", " ")
         
-        # 気温データの取得（一番近い発表場所から取得）
-        temp_data = res[0]["timeSeries"][2]["temps"]
-        today_max_temp = temp_data[1] if len(temp_data) > 1 else "---"
-        
-        return f"【{area_name}の天気】\n今日：{weather_text}\n予想気温：{today_max_temp}度"
+        return f"【{area_name}の天気】\n今日：{weather_text}"
     except Exception as e:
-        return f"データ取得エラー: {str(e)}"
+        return f"天気データ解析エラー: {str(e)}"
+
+def get_garbage_info():
+    # 日本時間で現在の曜日を取得（月=0, 火=1, 水=2, 木=3, 金=4, 土=5, 日=6）
+    tz = zoneinfo.ZoneInfo("Asia/Tokyo")
+    now = datetime.now(tz)
+    weekday = now.weekday()
+    
+    # 曜日の日本語テキスト
+    weekdays_ja = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日"]
+    today_weekday_str = weekdays_ja[weekday]
+    
+    # 札幌市の一般的なゴミ収集日（例：月木が燃やせる、水が資源）の簡易判定
+    # ※後ほど、ユーザーごとに個別の曜日を設定できるように拡張します
+    if weekday == 0 or weekday == 3: # 月曜日または木曜日
+        garbage_type = "🔥「燃やせるゴミ」"
+    elif weekday == 2: # 水曜日
+        garbage_type = "♻️「容器包装プラスチック・資源ゴミ」"
+    else:
+        garbage_type = "❌「本日のゴミ収集はありません」"
+        
+    return f"【今日のゴミ出し情報】\n今日は {today_weekday_str} です。\n{garbage_type}"
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -63,15 +94,15 @@ def callback():
 def handle_message(event):
     user_message = event.message.text.strip()
     
-    # 1. 天気情報の取得を試みる
+    # 天気情報の取得
     weather_info = get_weather_detail(user_message)
     
     if weather_info:
-        # 2. ゴリ出し情報のダミー（次のステップで、曜日連動・ユーザー個別判定にします）
-        dummy_garbage = "\n\n【今日のゴミ】\n設定された曜日（月・木）に基づき、本日は「燃やせるゴミ」の日です！"
-        reply_text = weather_info + dummy_garbage
+        # ゴミ情報の取得
+        garbage_info = get_garbage_info()
+        reply_text = f"{weather_info}\n\n{garbage_info}"
     else:
-        reply_text = f"「{user_message}」ですね！\n\n【地域登録のデモ】\n「札幌市北区」のように送ると、その地域の天気（試作版）とゴミの日を返します。"
+        reply_text = f"「{user_message}」ですね！\n\n「札幌市中央区」や「札幌市北区」のように送ると、その地域の天気と今日のゴミ出し情報をセットで返します！"
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
