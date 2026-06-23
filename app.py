@@ -25,33 +25,34 @@ if channel_secret is None or channel_access_token is None:
 configuration = Configuration(access_token=channel_access_token)
 handler = WebhookHandler(channel_secret)
 
-# 主要都市の気象庁地域コード
-CITY_CODES = {
-    "東京": "130010",
-    "大阪": "270000",
-    "名古屋": "230010",
-    "福岡": "400010",
-    "札幌": "016010"
+# 正しいURL構造に直した気象庁のデータ
+CITY_URLS = {
+    "東京": "https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json",
+    "大阪": "https://www.jma.go.jp/bosai/forecast/data/forecast/270000.json",
+    "名古屋": "https://www.jma.go.jp/bosai/forecast/data/forecast/230000.json",
+    "福岡": "https://www.jma.go.jp/bosai/forecast/data/forecast/400000.json",
+    "札幌": "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json"
 }
 
 def get_weather(city_name):
-    code = CITY_CODES.get(city_name)
-    if not code:
+    url = CITY_URLS.get(city_name)
+    if not url:
         return None
     try:
-        # 気象庁のデータ構造に正確に合わせました
-        url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{code}.json"
-        res = requests.get(url).json()
+        # 気象庁から実際のデータを取得
+        res = requests.get(url)
+        if res.status_code != 200:
+            return f"天気データの取得に失敗しました。(Status: {res.status_code})"
+            
+        data = res.json()
         
-        # エラーが絶対に起きないよう、安全にデータを取得する記述に変更
-        weather_text = res[0]["timeSeries"][0]["areas"][0]["weathers"][0]
-        # 余計な空白や改行を綺麗にする
-        weather_text = weather_text.replace("\u3000", " ")
+        # 確実にデータが存在する場所から「今日の天気」のテキストを取得
+        weather_text = data[0]["timeSeries"][0]["areas"][0]["weathers"][0]
+        weather_text = weather_text.replace("\u3000", " ") # 全角スペースを半角に綺麗にする
         
         return f"【{city_name}の天気】\n今日：{weather_text}"
     except Exception as e:
-        # 万が一エラーが出ても原因がわかるようにログを返します
-        return f"天気データの取得に失敗しました。詳細: {str(e)}"
+        return f"天気データの解析に失敗しました。詳細: {str(e)}"
 
 @app.route("/callback", methods=['POST'])
 def callback():
