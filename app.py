@@ -60,6 +60,8 @@ def init_db():
 init_db()
 
 def load_settings(user_id):
+    if not user_id:
+        return None
     conn = psycopg2.connect(db_url)
     cur = conn.cursor(cursor_factory=DictCursor)
     cur.execute("SELECT * FROM users WHERE user_id = %s;", (user_id,))
@@ -71,6 +73,8 @@ def load_settings(user_id):
     return None
 
 def save_settings(user_id, key, value):
+    if not user_id:
+        return
     conn = psycopg2.connect(db_url)
     cur = conn.cursor()
     cur.execute("""
@@ -211,7 +215,7 @@ def get_anytime_info(user_id, target_day_str="全部"):
             weathers = data[0]["timeSeries"][0]["areas"][0]["weathers"]
             today_w = weathers[0].replace("\u3000", " ")
             tomorrow_w = weathers[1].replace("\u3000", " ") if len(weathers) > 1 else "わからん"
-            day_after_w = weathers[2].replace("\u3000", " ") if len(weathers) > 2 else "わからん"
+            day_after_w = weathers[2].replace("\u3000", " ") if len(weathers) > 2 else "わ防らん"
             
             for ts in data[0]["timeSeries"]:
                 if "temps" in ts:
@@ -278,4 +282,180 @@ def morning_push():
                 
             is_match, is_tomorrow = False, False
             if push_time.startswith("前日夜"):
-                target_hour = int
+                target_hour = int(push_time.replace("前日夜:", "").replace("時", ""))
+                if current_hour == target_hour: is_match, is_tomorrow = True, True
+            elif push_time.startswith("当日朝"):
+                target_hour = int(push_time.replace("当日朝:", "").replace("時", ""))
+                if current_hour == target_hour: is_match = True
+                    
+            if is_match:
+                msg_text = get_weather_and_garbage(user_id, is_tomorrow=is_tomorrow)
+                if msg_text:
+                    try:
+                        quick_reply_items = [QuickReplyItem(action=MessageAction(label="👍 出したで！", text="ゴミ出したで！"))]
+                        line_bot_api.push_message(
+                            PushMessageRequest(
+                                to=user_id, 
+                                messages=[TextMessage(text=msg_text, quick_reply=QuickReply(items=quick_reply_items))]
+                            )
+                        )
+                    except Exception as e:
+                        print(f"Push failed for {user_id}: {e}")
+    return 'Push Sent'
+
+@handler.add(FollowEvent)
+def handle_follow(event):
+    user_id = getattr(event.source, 'user_id', None)
+    print(f"DEBUG FollowEvent: user_id={user_id}")
+    reply_text = "自分、登録してくれたんか！ありがとなぁ！🎉\nここはウチがおんどれの地域の「天気」と「ゴミの日」をまとめて教えたる場所や。\n\nまずは下のボタン押して、設定から始めよかぇ！"
+    quick_reply_items = [QuickReplyItem(action=MessageAction(label="⚙️ 設定を始めるんや！", text="初期設定"))]
+    
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=reply_text, quick_reply=QuickReply(items=quick_reply_items))]
+            )
+        )
+
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_message(event):
+    user_id = getattr(event.source, 'user_id', None)
+    user_message = event.message.text.strip()
+    print(f"DEBUG MessageEvent: user_id={user_id}, text={user_message}")
+    
+    if not user_id:
+        print("ERROR: user_id is missing from event source!")
+        return
+
+    reply_text = ""
+    quick_reply_items = []
+    day_map = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
+    patterns_week = ["月曜", "火曜", "水曜", "木曜", "金曜", "収集なし"]
+
+    current_settings = load_settings(user_id)
+
+    # 応答ロジックの判定開始
+    if user_message == "ゴミ出したで！":
+        reply_text = "おぅ、ちゃんと出せたみたいやな。明日も遅れんとキリキリ働きや！"
+
+    elif user_message in ["初期設定", "設定"]:
+        reply_text = "おんどれの住んどる地域はどっちや？選べや！"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="札幌市や", text="地域選択:札幌市")),
+            QuickReplyItem(action=MessageAction(label="他の市町村や（根室とか）", text="地域選択:その他"))
+        ]
+        
+    elif user_message == "地域選択:札幌市":
+        reply_text = "お住まいの「区」をきっちり選びや！"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label=ward, text=f"区選択:{ward}")) for ward in SAPPORO_WARDS
+        ]
+        
+    elif user_message == "地域選択:その他":
+        reply_text = "おんどれの市町村名を「根室市」とか「旭川市」みたいに直接チャットで打ち込んで送りや！"
+
+    elif any(user_message.endswith(s) for s in ["市", "町", "村"]) and not user_message.startswith("区選択:"):
+        save_settings(user_id, "area", user_message)
+        reply_text = f"【{user_message}】で頭に叩き込んだわ！\n次は「燃やせるゴミ」の曜日を教えや！"
+        patterns = ["月・木", "火・金", "水・土", "月・水・金", "火・木・土"]
+        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"燃やせる:{p}")) for p in patterns]
+
+    elif user_message.startswith("区選択:"):
+        ward = user_message.split(":")[1]
+        save_settings(user_id, "area", f"札幌市{ward}")
+        reply_text = f"【札幌市{ward}】で頭に叩き込んだわ！\n次は「燃やせるゴミ」の曜日を教えや！"
+        patterns = ["月・木", "火・金", "水・土"]
+        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"燃やせる:{p}")) for p in patterns]
+
+    elif user_message.startswith("燃やせる:"):
+        p_str = user_message.split(":")[1]
+        burnable_days = [day_map[char] for char in p_str if char in day_map]
+        save_settings(user_id, "burnable", burnable_days)
+        reply_text = f"燃やせるゴミは（{p_str}）やな！\n次は「容器包装プラスチック」の曜日を選びや！"
+        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"プラ:{p}")) for p in patterns_week]
+
+    elif user_message.startswith("プラ:"):
+        p_str = user_message.split(":")[1][0]
+        plastic_day = [day_map[p_str]] if p_str in day_map else []
+        save_settings(user_id, "plastic", plastic_day)
+        reply_text = f"プラスチックは（{p_str}曜）やな！\n次は「びん・缶・ペットボトル」の曜日や！\n⚠️札幌ならスプレー缶・乾電池もこの日やで！"
+        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"びん缶:{p}")) for p in patterns_week]
+
+    elif user_message.startswith("びん缶:"):
+        bc_str = user_message.split(":")[1][0]
+        bottle_can_day = [day_map[bc_str]] if bc_str in day_map else []
+        save_settings(user_id, "bottle_can", bottle_can_day)
+        reply_text = f"びん缶ペットは（{bc_str}曜）やな！\nほな、毎週または隔週の「雑がみ・紙類」の曜日を選んでや！"
+        quick_reply_items = [QuickReplyItem(action=MessageAction(label=p, text=f"雑がみ曜日:{p}")) for p in patterns_week]
+
+    elif user_message.startswith("雑がみ曜日:"):
+        r_str = user_message.split(":")[1][0]
+        resource_day = [day_map[r_str]] if r_str in day_map else []
+        save_settings(user_id, "paper", resource_day)
+        reply_text = f"雑がみは（{r_str}曜）やな！\nこれ、収集のペースはどんなもんや？"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="毎週や！", text="雑がみ頻度:毎週")),
+            QuickReplyItem(action=MessageAction(label="第1・第3週だけや！", text="雑がみ頻度:第1・第3")),
+            QuickReplyItem(action=MessageAction(label="第2・第4週だけや！", text="雑がみ頻度:第2・第4"))
+        ]
+
+    elif user_message.startswith("雑がみ頻度:"):
+        freq = user_message.split(":")[1]
+        save_settings(user_id, "paper_week", freq)
+        reply_text = "ほな、最後に通知するタイミングを選びや！\n「前日の夜」か「当日の朝」か、どっちがええ？"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="🌙 前日の夜にするわ", text="通知タイプ:夜")),
+            QuickReplyItem(action=MessageAction(label="☀️ 当日の朝にするわ", text="通知タイプ:朝"))
+        ]
+
+    elif user_message == "通知タイプ:夜":
+        reply_text = "前日の夜やな！何時頃に鳴らしたらええ？"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="20:00頃", text="通知時間:前日夜:20時")),
+            QuickReplyItem(action=MessageAction(label="21:00頃", text="通知時間:前日夜:21時")),
+            QuickReplyItem(action=MessageAction(label="22:00頃", text="通知時間:前日夜:22時"))
+        ]
+
+    elif user_message == "通知タイプ:朝":
+        reply_text = "当日の朝やな！何時頃に起こしたらええ？"
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="06:00頃", text="通知時間:当日朝:6時")),
+            QuickReplyItem(action=MessageAction(label="07:00頃", text="通知時間:当日朝:7時")),
+            QuickReplyItem(action=MessageAction(label="08:00頃", text="通知時間:当日朝:8時"))
+        ]
+
+    elif user_message.startswith("通知時間:"):
+        time_setting = user_message.replace("通知時間:", "")
+        save_settings(user_id, "push_time", time_setting)
+        reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\n今回はデータベースにキッチリ刻み込んだからな、二度と忘れへんで！気ぃ引き締めや！"
+
+    elif current_settings and current_settings.get("push_time"):
+        if "今日" in user_message:
+            reply_text = get_anytime_info(user_id, "今日")
+        elif "明日" in user_message:
+            reply_text = get_anytime_info(user_id, "明日")
+        elif "明後日" in user_message:
+            reply_text = get_anytime_info(user_id, "明後日")
+        else:
+            reply_text = get_anytime_info(user_id, "全部")
+            quick_reply_items = [
+                QuickReplyItem(action=MessageAction(label="📅 今日のゴミ", text="今日")),
+                QuickReplyItem(action=MessageAction(label="📅 明日のゴミ", text="明日")),
+                QuickReplyItem(action=MessageAction(label="📅 明後日のゴミ", text="明後日"))
+            ]
+    else:
+        reply_text = "地域の設定がまだやで！\n下のボタン押すか、「初期設定」って送って設定しぃヤ！"
+        quick_reply_items = [QuickReplyItem(action=MessageAction(label="⚙️ 設定を始めるんや！", text="初期設定"))]
+
+    if reply_text:
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            q_reply = QuickReply(items=quick_reply_items) if quick_reply_items else None
+            line_bot_api.reply_message(
+                ReplyMessageRequest(reply_token=event.reply_token, messages=[TextMessage(text=reply_text, quick_reply=q_reply)])
+            )
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000)
