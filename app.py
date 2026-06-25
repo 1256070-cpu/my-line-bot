@@ -342,7 +342,7 @@ def handle_message(event):
             QuickReplyItem(action=MessageAction(label=ward, text=f"区選択:{ward}")) for ward in SAPPORO_WARDS
         ]
         
-    elif user_message == "地域選択:その他":
+    elif user_message == "地域選択:fancy_other":
         reply_text = "おんどれの市町村名を「根室市」とか「旭川市」みたいに直接チャットで打ち込んで送りや！"
 
     elif any(user_message.endswith(s) for s in ["市", "町", "村"]) and not user_message.startswith("区選択:"):
@@ -420,7 +420,6 @@ def handle_message(event):
         save_settings(user_id, "push_time", time_setting)
         reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\n今回はデータベースにキッチリ刻み込んだからな、二度と忘れへんで！気ぃ引き締めや！"
 
-    # いつでも確認機能
     elif current_settings and current_settings.get("push_time"):
         if "今日" in user_message:
             reply_text = get_anytime_info(user_id, "今日")
