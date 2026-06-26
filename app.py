@@ -10,7 +10,7 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage,
-    QuickReply, QuickReplyItem, MessageAction, PushMessageRequest
+    QuickReply, QuickReplyItem, MessageAction
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, FollowEvent
 
@@ -119,82 +119,14 @@ def judge_garbage(target_date, settings):
     return "・".join(g_list) if g_list else "❌定期回収のゴミはないわ！"
 
 def get_majima_notice():
-    return "\n⚠️あとなぁ！月1回の「燃やせないゴミ」とか期間限定の「枝・葉・草」みたいなレアなやつは、ウチの通知をアテにせんと自分でカレンダー確認して出しにいきや！忘れたら承知せんでぇ！"
-
-def get_weather_and_garbage(user_id, is_tomorrow=False):
-    settings = load_settings(user_id)
-    if not settings or not settings.get("push_time"):
-        return None
-        
-    area_name = settings.get("area") or "札幌市北区"
-    url = "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json"
-    for key, value in REGION_CODES.items():
-        if key in area_name:
-            url = value
-            break
-
-    try:
-        res = requests.get(url)
-        if res.status_code != 200: 
-            return f"【{area_name}の案内や！】\n天気のデータ、上手く取れんかったわ！すまんな！"
-        data = res.json()
-    except Exception:
-        return f"【{area_name}の案内や！】\n天気のデータ、上手く取れんかったわ！すまんな！"
-        
-    try:
-        weathers = data[0]["timeSeries"][0]["areas"][0]["weathers"]
-        today_w = weathers[0].replace("\u3000", " ")
-        tomorrow_w = weathers[1].replace("\u3000", " ") if len(weathers) > 1 else "わからん"
-    except Exception:
-        today_w, tomorrow_w = "データなし", "データなし"
-        
-    temp_text_today = ""
-    temp_text_tomorrow = ""
-    try:
-        for ts in data[0]["timeSeries"]:
-            if "temps" in ts:
-                temps = ts["temps"]
-                if len(temps) >= 2: temp_text_today = f" (気温: {temps[0]}℃〜{temps[1]}℃)"
-                if len(temps) >= 4: temp_text_tomorrow = f" (気温: {temps[2]}℃〜{temps[3]}℃)"
-                break
-    except Exception:
-        pass
-
-    tz = zoneinfo.ZoneInfo("Asia/Tokyo")
-    now_tokyo = datetime.now(tz)
-    weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
-    
-    if is_tomorrow:
-        target_date = now_tokyo + timedelta(days=1)
-        lines = [
-            f"【{area_name}の夜回りやてぇ！】",
-            "夜遅くにすまんな！明日のゴミ出しの準備はできとるか？\n",
-            f"📅明日 ({weekdays_ja[target_date.weekday()]}): {tomorrow_w}{temp_text_tomorrow}",
-            f" ┗ 出すゴミ: {judge_garbage(target_date, settings)}\n",
-            "うかうかしとったら、明日の朝ゴミ出し遅れるでぇ！",
-            get_majima_notice(),
-            "\n準備できたら下のボタン押しや！"
-        ]
-    else:
-        target_date = now_tokyo
-        lines = [
-            f"【{area_name}の朝の挨拶やdeぇ！】",
-            "おっしゃ、今日の天気とゴミ情報教えたるわ！おんどれ起きや！\n",
-            f"📅今日 ({weekdays_ja[target_date.weekday()]}): {today_w}{temp_text_today}",
-            f" ┗ 出すゴミ: {judge_garbage(target_date, settings)}\n",
-            "しっかりゴミ出して、シャキッと働きや！",
-            get_majima_notice(),
-            "\n出したら下のボタン押しや！"
-        ]
-        
-    return "\n".join(lines)
+    return "\n⚠️あとなぁ！月1回の「燃やせないゴミ」とか期間限定の「枝・葉・草」みたいなレアなやつは、ウチの通知をアテにせんと自分でカレンダー確認して出しにいきや！"
 
 def get_anytime_info(user_id, target_day_str="全部"):
     settings = load_settings(user_id)
-    if not settings or not settings.get("push_time"):
-        return None
+    if not settings:
+        return "地域の設定がまだ終わってへんで！「初期設定」ってチャットで送って設定しぃヤ！"
         
-    area_name = settings.get("area") or "札幌市北区"
+    area_name = settings.get("area") or "未設定"
     url = "https://www.jma.go.jp/bosai/forecast/data/forecast/016000.json"
     for key, value in REGION_CODES.items():
         if key in area_name:
@@ -215,7 +147,7 @@ def get_anytime_info(user_id, target_day_str="全部"):
             weathers = data[0]["timeSeries"][0]["areas"][0]["weathers"]
             today_w = weathers[0].replace("\u3000", " ")
             tomorrow_w = weathers[1].replace("\u3000", " ") if len(weathers) > 1 else "わからん"
-            day_after_w = weathers[2].replace("\u3000", " ") if len(weathers) > 2 else "わ防らん"
+            day_after_w = weathers[2].replace("\u3000", " ") if len(weathers) > 2 else "わからん"
             
             for ts in data[0]["timeSeries"]:
                 if "temps" in ts:
@@ -237,11 +169,11 @@ def get_anytime_info(user_id, target_day_str="全部"):
     notice = get_majima_notice()
     
     if target_day_str == "今日":
-        return f"【{area_name}：今日の情報や！】\n📅今日 ({weekdays_ja[d0.weekday()]}): {today_w}{temp_today}\n ┗ ゴミ: {judge_garbage(d0, settings)}\n{notice}"
+        return f"【{area_name}：今日の情報や！】\n📅今日 ({weekdays_ja[d0.weekday()]}): {today_w}{temp_today}\n ┗ ゴミ: {judge_garbage(d0, settings)}{notice}"
     elif target_day_str == "明日":
-        return f"【{area_name}：明日の情報や！】\n📅明日 ({weekdays_ja[d1.weekday()]}): {tomorrow_w}{temp_tomorrow}\n ┗ ゴミ: {judge_garbage(d1, settings)}\n{notice}"
+        return f"【{area_name}：明日の情報や！】\n📅明日 ({weekdays_ja[d1.weekday()]}): {tomorrow_w}{temp_tomorrow}\n ┗ ゴミ: {judge_garbage(d1, settings)}{notice}"
     elif target_day_str == "明後日":
-        return f"【{area_name}：明後日の情報や！】\n📅明後日 ({weekdays_ja[d2.weekday()]}): {day_after_w}\n ┗ ゴミ: {judge_garbage(d2, settings)}\n{notice}"
+        return f"【{area_name}：明後日の情報や！】\n📅明後日 ({weekdays_ja[d2.weekday()]}): {day_after_w}\n ┗ ゴミ: {judge_garbage(d2, settings)}{notice}"
     else:
         lines = [
             f"【{area_name}のご案内や！】",
@@ -262,52 +194,10 @@ def callback():
         abort(400)
     return 'OK'
 
-@app.route("/morning-push", methods=['GET'])
-def morning_push():
-    tz = zoneinfo.ZoneInfo("Asia/Tokyo")
-    current_hour = datetime.now(tz).hour
-    
-    conn = psycopg2.connect(db_url)
-    cur = conn.cursor(cursor_factory=DictCursor)
-    cur.execute("SELECT user_id, push_time FROM users WHERE push_time IS NOT NULL;")
-    all_users = cur.fetchall()
-    cur.close()
-    conn.close()
-    
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        for user in all_users:
-            user_id = user["user_id"]
-            push_time = user["push_time"]
-                
-            is_match, is_tomorrow = False, False
-            if push_time.startswith("前日夜"):
-                target_hour = int(push_time.replace("前日夜:", "").replace("時", ""))
-                if current_hour == target_hour: is_match, is_tomorrow = True, True
-            elif push_time.startswith("当日朝"):
-                target_hour = int(push_time.replace("当日朝:", "").replace("時", ""))
-                if current_hour == target_hour: is_match = True
-                    
-            if is_match:
-                msg_text = get_weather_and_garbage(user_id, is_tomorrow=is_tomorrow)
-                if msg_text:
-                    try:
-                        quick_reply_items = [QuickReplyItem(action=MessageAction(label="👍 出したで！", text="ゴミ出したで！"))]
-                        line_bot_api.push_message(
-                            PushMessageRequest(
-                                to=user_id, 
-                                messages=[TextMessage(text=msg_text, quick_reply=QuickReply(items=quick_reply_items))]
-                            )
-                        )
-                    except Exception as e:
-                        print(f"Push failed for {user_id}: {e}")
-    return 'Push Sent'
-
 @handler.add(FollowEvent)
 def handle_follow(event):
     user_id = getattr(event.source, 'user_id', None)
-    print(f"DEBUG FollowEvent: user_id={user_id}")
-    reply_text = "自分、登録してくれたんか！ありがとなぁ！🎉\nここはウチがおんどれの地域の「天気」と「ゴミの日」をまとめて教えたる場所や。\n\nまずは下のボタン押して、設定から始めよかぇ！"
+    reply_text = "自分、登録してくれたんか！ありがとなぁ！🎉\n\nまずは下のボタン押して、設定から始めよかぇ！"
     quick_reply_items = [QuickReplyItem(action=MessageAction(label="⚙️ 設定を始めるんや！", text="初期設定"))]
     
     with ApiClient(configuration) as api_client:
@@ -323,10 +213,8 @@ def handle_follow(event):
 def handle_message(event):
     user_id = getattr(event.source, 'user_id', None)
     user_message = event.message.text.strip()
-    print(f"DEBUG MessageEvent: user_id={user_id}, text={user_message}")
     
     if not user_id:
-        print("ERROR: user_id is missing from event source!")
         return
 
     reply_text = ""
@@ -336,9 +224,8 @@ def handle_message(event):
 
     current_settings = load_settings(user_id)
 
-    # 応答ロジックの判定開始
     if user_message == "ゴミ出したで！":
-        reply_text = "おぅ、ちゃんと出せたみたいやな。明日も遅れんとキリキリ働きや！"
+        reply_text = "おぅ、ちゃんと出せたみたいやな。次も遅れんとキリキリ働きや！"
 
     elif user_message in ["初期設定", "設定"]:
         reply_text = "おんどれの住んどる地域はどっちや？選べや！"
@@ -353,7 +240,7 @@ def handle_message(event):
             QuickReplyItem(action=MessageAction(label=ward, text=f"区選択:{ward}")) for ward in SAPPORO_WARDS
         ]
         
-    elif user_message == "地域選択:その他":
+    elif user_message == "地域選択:Official":
         reply_text = "おんどれの市町村名を「根室市」とか「旭川市」みたいに直接チャットで打ち込んで送りや！"
 
     elif any(user_message.endswith(s) for s in ["市", "町", "村"]) and not user_message.startswith("区選択:"):
@@ -404,34 +291,9 @@ def handle_message(event):
     elif user_message.startswith("雑がみ頻度:"):
         freq = user_message.split(":")[1]
         save_settings(user_id, "paper_week", freq)
-        reply_text = "ほな、最後に通知するタイミングを選びや！\n「前日の夜」か「当日の朝」か、どっちがええ？"
-        quick_reply_items = [
-            QuickReplyItem(action=MessageAction(label="🌙 前日の夜にするわ", text="通知タイプ:夜")),
-            QuickReplyItem(action=MessageAction(label="☀️ 当日の朝にするわ", text="通知タイプ:朝"))
-        ]
+        reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\n毎日夜22時にウチが配信するから、届いたら「明日」ボタンを押しや！"
 
-    elif user_message == "通知タイプ:夜":
-        reply_text = "前日の夜やな！何時頃に鳴らしたらええ？"
-        quick_reply_items = [
-            QuickReplyItem(action=MessageAction(label="20:00頃", text="通知時間:前日夜:20時")),
-            QuickReplyItem(action=MessageAction(label="21:00頃", text="通知時間:前日夜:21時")),
-            QuickReplyItem(action=MessageAction(label="22:00頃", text="通知時間:前日夜:22時"))
-        ]
-
-    elif user_message == "通知タイプ:朝":
-        reply_text = "当日の朝やな！何時頃に起こしたらええ？"
-        quick_reply_items = [
-            QuickReplyItem(action=MessageAction(label="06:00頃", text="通知時間:当日朝:6時")),
-            QuickReplyItem(action=MessageAction(label="07:00頃", text="通知時間:当日朝:7時")),
-            QuickReplyItem(action=MessageAction(label="08:00頃", text="通知時間:当日朝:8時"))
-        ]
-
-    elif user_message.startswith("通知時間:"):
-        time_setting = user_message.replace("通知時間:", "")
-        save_settings(user_id, "push_time", time_setting)
-        reply_text = "🎉 おっしゃ！これですべての設定が完了やでぇ！\n今回はデータベースにキッチリ刻み込んだからな、二度と忘れへんで！気ぃ引き締めや！"
-
-    elif current_settings and current_settings.get("push_time"):
+    else:
         if "今日" in user_message:
             reply_text = get_anytime_info(user_id, "今日")
         elif "明日" in user_message:
@@ -440,14 +302,12 @@ def handle_message(event):
             reply_text = get_anytime_info(user_id, "明後日")
         else:
             reply_text = get_anytime_info(user_id, "全部")
-            quick_reply_items = [
-                QuickReplyItem(action=MessageAction(label="📅 今日のゴミ", text="今日")),
-                QuickReplyItem(action=MessageAction(label="📅 明日のゴミ", text="明日")),
-                QuickReplyItem(action=MessageAction(label="📅 明後日のゴミ", text="明後日"))
-            ]
-    else:
-        reply_text = "地域の設定がまだやで！\n下のボタン押すか、「初期設定」って送って設定しぃヤ！"
-        quick_reply_items = [QuickReplyItem(action=MessageAction(label="⚙️ 設定を始めるんや！", text="初期設定"))]
+            
+        quick_reply_items = [
+            QuickReplyItem(action=MessageAction(label="📅 今日のゴミ", text="今日")),
+            QuickReplyItem(action=MessageAction(label="📅 明日のゴミ", text="明日")),
+            QuickReplyItem(action=MessageAction(label="📅 明後日のゴミ", text="明後日"))
+        ]
 
     if reply_text:
         with ApiClient(configuration) as api_client:
